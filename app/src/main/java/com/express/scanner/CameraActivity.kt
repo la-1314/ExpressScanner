@@ -37,23 +37,17 @@ class CameraActivity : AppCompatActivity() {
 
     private var imageAnalysis: ImageAnalysis? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    // 全格式识别：快递面单可能用 CODE_128 / PDF417 / QR / UPC_A / EAN_13 / ITF 等多种码制
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(
-                Barcode.FORMAT_CODE_128,
-                Barcode.FORMAT_CODE_39,
-                Barcode.FORMAT_CODE_93,
-                Barcode.FORMAT_CODABAR,
-                Barcode.FORMAT_EAN_13,
-                Barcode.FORMAT_EAN_8,
-                Barcode.FORMAT_ITF,
-                Barcode.FORMAT_DATA_MATRIX
-            )
+            .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
             .build()
     )
 
     /** 已触发过震动的运单号，避免持续震动 */
     private val vibrated = mutableSetOf<String>()
+    /** 上一次诊断 Toast 内容，节流用 */
+    private var lastUnmatchedToast: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -103,6 +97,8 @@ class CameraActivity : AppCompatActivity() {
         }
         imageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            // 提升分辨率，便于识别面单上密集的小条码
+            .setTargetResolution(android.util.Size(1920, 1080))
             .build()
             .also { it.setAnalyzer(analysisExecutor, ::analyzeImage) }
 
@@ -150,8 +146,14 @@ class CameraActivity : AppCompatActivity() {
         // 命中且尚未标记的运单 → 标记已扫描 + 震动提示
         var needUpdateProgress = false
         val newlyFound = mutableSetOf<String>()
+        // 诊断：识别到但未命中的条码原文（去重），便于排查是"识别不到"还是"匹配不到"
+        val unmatchedRaw = linkedSetOf<String>()
         for (t in targets) {
-            val w = t.waybill ?: continue
+            val w = t.waybill
+            if (w == null) {
+                unmatchedRaw.add(t.rawValue)
+                continue
+            }
             if (!w.scanned) {
                 WaybillStore.markScanned(w.number, screenshotPath = null)
                 needUpdateProgress = true
@@ -173,6 +175,18 @@ class CameraActivity : AppCompatActivity() {
                     getString(R.string.scan_found) + "：" + first,
                     Toast.LENGTH_SHORT
                 ).show()
+            } else if (unmatchedRaw.isNotEmpty()) {
+                // 诊断 Toast：识别到了条码但没匹配到运单列表
+                // （节流：与上次内容相同时不重复弹）
+                val msg = unmatchedRaw.joinToString(" | ")
+                if (msg != lastUnmatchedToast) {
+                    lastUnmatchedToast = msg
+                    Toast.makeText(
+                        this,
+                        "识别到(未匹配): $msg",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }

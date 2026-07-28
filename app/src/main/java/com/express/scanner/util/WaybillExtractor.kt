@@ -87,14 +87,33 @@ object WaybillExtractor {
 
     /**
      * 判断一个扫码结果是否与某个运单号匹配。
-     * 允许大小写不同、以及条码可能只有数字部分的情况。
+     * 支持以下情形：
+     *  1) 完全相等（忽略大小写、首尾空白）
+     *  2) 条码只编码了运单号的数字部分（去掉字母前缀）
+     *  3) 条码内容 / 运单号 数字串互相包含（应对条码带校验位或额外前缀）
+     *  4) 运单号数字串互相包含条码内容
      */
     fun matches(scanned: String, target: String): Boolean {
         val s = scanned.trim().uppercase()
         val t = target.trim().uppercase()
+        if (s.isEmpty() || t.isEmpty()) return false
         if (s == t) return true
-        // 条码有时只编码数字部分
-        val digits = t.filter { it.isDigit() }
-        return digits.length >= 10 && s == digits
+
+        val sDigits = s.filter { it.isDigit() }
+        val tDigits = t.filter { it.isDigit() }
+        // 数字部分至少 6 位才用数字规则匹配，避免误命中短串
+        if (sDigits.length >= 6 && tDigits.length >= 6) {
+            if (sDigits == tDigits) return true
+            // 互相包含（应对条码额外校验位 / 运单号前缀数字）
+            if (sDigits.length >= 8 && (tDigits.contains(sDigits) || sDigits.contains(tDigits))) {
+                return true
+            }
+            // 条码数字是运单号数字的后缀（去掉前缀字母后的常见编码方式）
+            if (tDigits.endsWith(sDigits) && sDigits.length >= 8) return true
+            if (sDigits.endsWith(tDigits) && tDigits.length >= 8) return true
+        }
+        // 整串互相包含（应对条码含额外前/后缀）
+        if (s.length >= 8 && (t.contains(s) || s.contains(t))) return true
+        return false
     }
 }
