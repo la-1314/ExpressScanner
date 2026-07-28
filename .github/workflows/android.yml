@@ -1,0 +1,50 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: |
+          mkdir -p artifact
+          cp app/build/outputs/apk/debug/app-debug.apk artifact/ExpressScanner-debug.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Release v1.0.${{ github.run_number }}
+          body: |
+            # ExpressScanner v1.0.${{ github.run_number }}
+
+            快递运单批量提取与扫描 Android 应用。
+
+            ## 下载
+            - `ExpressScanner-debug.apk` 直接安装（debug 签名）
+          files: artifact/ExpressScanner-debug.apk
+          generate_release_notes: true
+          fail_on_unmatched_files: true

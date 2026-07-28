@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="16dp"
+    android:layout_marginVertical="6dp"
+    app:cardBackgroundColor="@color/miui_card"
+    app:cardCornerRadius="20dp"
+    app:cardElevation="1dp"
+    app:strokeWidth="0dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="16dp">
+
+        <View
+            android:id="@+id/dotStatus"
+            android:layout_width="10dp"
+            android:layout_height="10dp"
+            android:background="@drawable/bg_dot_gray"
+            android:layout_marginEnd="14dp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/tvNumber"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/miui_text_primary"
+                    android:textSize="17sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.02"
+                    tools:text="SF1234567890123" />
+
+                <TextView
+                    android:id="@+id/tvCarrier"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_chip_blue"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="2dp"
+                    android:textColor="@color/miui_blue"
+                    android:textSize="11sp"
+                    android:visibility="gone"
+                    tools:text="顺丰速运" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/miui_text_secondary"
+                android:textSize="12sp"
+                tools:text="待扫描" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/btnCopy"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:padding="8dp"
+            android:src="@drawable/ic_copy"
+            android:contentDescription="@string/btn_copy" />
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>

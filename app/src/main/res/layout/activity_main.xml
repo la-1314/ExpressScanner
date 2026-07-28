@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/miui_bg">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@android:color/transparent"
+        app:elevation="0dp">
+
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            app:title="@string/app_name"
+            app:titleCentered="true"
+            app:titleTextColor="@color/miui_text_primary"
+            app:titleTextAppearance="@style/TextAppearance.MiuiX.Title" />
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingBottom="100dp">
+
+            <!-- 输入卡片 -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardBackgroundColor="@color/miui_card"
+                app:cardCornerRadius="20dp"
+                app:cardElevation="1dp"
+                app:strokeWidth="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="批量输入文字"
+                        android:textColor="@color/miui_text_primary"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <EditText
+                        android:id="@+id/etInput"
+                        android:layout_width="match_parent"
+                        android:layout_height="160dp"
+                        android:layout_marginTop="10dp"
+                        android:background="@android:color/transparent"
+                        android:gravity="top|start"
+                        android:hint="@string/hint_input"
+                        android:textColorHint="@color/miui_text_hint"
+                        android:textColor="@color/miui_text_primary"
+                        android:textSize="15sp"
+                        android:inputType="textMultiLine|textNoSuggestions"
+                        android:importantForAutofill="no"
+                        tools:ignore="LabelFor" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginTop="8dp">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnClear"
+                            style="@style/Widget.MiuiX.Button.Secondary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="@string/btn_clear" />
+
+                        <Space
+                            android:layout_width="12dp"
+                            android:layout_height="wrap_content" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnExtract"
+                            style="@style/Widget.MiuiX.Button.Primary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1.6"
+                            android:text="@string/btn_extract"
+                            app:icon="@drawable/ic_extract"
+                            app:iconTint="@color/white"
+                            app:iconGravity="textStart" />
+                    </LinearLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- 扫描入口 -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnScan"
+                style="@style/Widget.MiuiX.Button.Primary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:text="@string/btn_scan"
+                app:icon="@drawable/ic_scan"
+                app:iconTint="@color/white"
+                app:iconGravity="textStart" />
+
+            <!-- 结果统计 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="18dp"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp">
+
+                <TextView
+                    android:id="@+id/tvCount"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/miui_text_secondary"
+                    android:textSize="13sp"
+                    tools:text="共提取到 0 条运单号" />
+
+                <TextView
+                    android:id="@+id/tvScannedCount"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textColor="@color/miui_green"
+                    android:textSize="13sp"
+                    tools:text="已扫描 0/0" />
+            </LinearLayout>
+
+            <!-- 列表 -->
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rvList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:clipToPadding="false"
+                android:nestedScrollingEnabled="false"
+                app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
+                tools:listitem="@layout/item_waybill" />
+
+            <TextView
+                android:id="@+id/tvEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="180dp"
+                android:gravity="center"
+                android:text="@string/empty_list"
+                android:textColor="@color/miui_text_hint"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

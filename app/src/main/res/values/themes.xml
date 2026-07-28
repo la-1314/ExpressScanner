@@ -1,0 +1,65 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- MIUI X 风格主题：圆角、柔和阴影、科技蓝强调 -->
+    <style name="Theme.MiuiX" parent="Theme.MaterialComponents.Day.NoActionBar">
+        <item name="colorPrimary">@color/miui_blue</item>
+        <item name="colorPrimaryVariant">@color/miui_blue_dark</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">@color/miui_blue</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="android:colorBackground">@color/miui_bg</item>
+        <item name="android:windowBackground">@color/miui_bg</item>
+        <item name="android:statusBarColor">@color/miui_bg</item>
+        <item name="android:navigationBarColor">@color/miui_bg</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:textColorPrimary">@color/miui_text_primary</item>
+        <item name="android:textColorSecondary">@color/miui_text_secondary</item>
+        <item name="materialCardViewStyle">@style/Widget.MiuiX.CardView</item>
+    </style>
+
+    <!-- MIUI X 卡片：大圆角 + 轻阴影 -->
+    <style name="Widget.MiuiX.CardView" parent="Widget.MaterialComponents.CardView">
+        <item name="cardBackgroundColor">@color/miui_card</item>
+        <item name="cardCornerRadius">20dp</item>
+        <item name="cardElevation">2dp</item>
+        <item name="contentPadding">16dp</item>
+    </style>
+
+    <!-- 主按钮：胶囊形 -->
+    <style name="Widget.MiuiX.Button.Primary" parent="Widget.MaterialComponents.Button">
+        <item name="backgroundTint">@color/miui_blue</item>
+        <item name="cornerRadius">24dp</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.04</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
+        <item name="elevation">0dp</item>
+    </style>
+
+    <!-- 次按钮：浅蓝底 -->
+    <style name="Widget.MiuiX.Button.Secondary" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="strokeColor">@color/miui_divider</item>
+        <item name="cornerRadius">24dp</item>
+        <item name="android:textColor">@color/miui_text_primary</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <!-- 输入框：圆角无填充 -->
+    <style name="Widget.MiuiX.TextInputLayout" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxCornerRadiusTopStart">16dp</item>
+        <item name="boxCornerRadiusTopEnd">16dp</item>
+        <item name="boxCornerRadiusBottomStart">16dp</item>
+        <item name="boxCornerRadiusBottomEnd">16dp</item>
+        <item name="boxStrokeColor">@color/miui_blue</item>
+        <item name="hintTextColor">@color/miui_text_hint</item>
+    </style>
+
+    <style name="TextAppearance.MiuiX.Title" parent="TextAppearance.MaterialComponents.Headline6">
+        <item name="android:textColor">@color/miui_text_primary</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextAppearance.MiuiX.Body" parent="TextAppearance.MaterialComponents.Body2">
+        <item name="android:textColor">@color/miui_text_secondary</item>
+    </style>
+</resources>
