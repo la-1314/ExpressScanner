@@ -199,7 +199,7 @@ class CameraActivity : AppCompatActivity() {
             showResult(match, raw, null)
             return
         }
-        val output = ImageCapture.OutputFileOptions.Builder(resolver, uri).build()
+        val output = ImageCapture.OutputFileOptions.Builder(resolver, uri, contentValues).build()
         capture.takePicture(
             output,
             ContextCompat.getMainExecutor(this),

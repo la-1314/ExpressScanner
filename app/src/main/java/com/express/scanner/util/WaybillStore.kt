@@ -30,7 +30,7 @@ object WaybillStore {
     }
 
     /** 标记某个运单为已扫描并记录截图路径 */
-    fun markScanned(number: String, screenshotPath: String): Waybill? {
+    fun markScanned(number: String, screenshotPath: String?): Waybill? {
         val target = _list.firstOrNull { WaybillExtractor.matches(number, it.number) }
         target?.let {
             it.scanned = true
