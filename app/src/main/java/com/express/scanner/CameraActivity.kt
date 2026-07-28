@@ -2,44 +2,39 @@ package com.express.scanner
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.ContentValues
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
-import android.provider.MediaStore
-import android.view.View
-import android.view.animation.AnimationUtils
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import com.express.scanner.databinding.ActivityCameraBinding
-import com.express.scanner.model.Waybill
 import com.express.scanner.util.WaybillStore
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.Executors
 
+/**
+ * 摄像头实时扫描 + 画面标注。
+ *
+ * 工作方式：持续识别画面中所有条形码，命中待找运单的条码在画面中实时高亮
+ * （绿色框 + 运单号气泡），方便在驿站货架前一眼定位目标快递。
+ * 找到的运单会自动标记为「已扫描」，回到主界面可看到进度。
+ */
 class CameraActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityCameraBinding
     private val analysisExecutor = Executors.newSingleThreadExecutor()
 
-    private var imageCapture: ImageCapture? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private val scanner = BarcodeScanning.getClient(
@@ -57,13 +52,8 @@ class CameraActivity : AppCompatActivity() {
             .build()
     )
 
-    /** 是否处于“已命中展示”状态，避免重复触发 */
-    private var locked = false
-    /** 最近处理过的条码内容（节流，避免同一条码连续回调） */
-    private var lastProcessed: String? = null
-    private var lastProcessedAt = 0L
-
-    private val timeFmt = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+    /** 已触发过震动的运单号，避免持续震动 */
+    private val vibrated = mutableSetOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,21 +69,20 @@ class CameraActivity : AppCompatActivity() {
         }
 
         binding.btnBack.setOnClickListener { finish() }
-        binding.btnRescan.setOnClickListener { resetForRescan() }
-        binding.btnDone.setOnClickListener { finish() }
-
-        // 扫描线动画（在扫描框内来回移动）
-        binding.scanLine.startAnimation(
-            AnimationUtils.loadAnimation(this, R.anim.scan_line_anim)
-        )
-        showProgress()
+        updateProgress()
 
         binding.preview.post { startCamera() }
     }
 
-    private fun showProgress() {
-        binding.tvProgress.visibility = View.VISIBLE
-        binding.tvProgress.text = "剩余 ${WaybillStore.remainingCount()}/${WaybillStore.totalCount()}"
+    private fun updateProgress() {
+        val total = WaybillStore.totalCount()
+        val done = WaybillStore.list.count { it.scanned }
+        val remain = total - done
+        binding.tvProgress.text = if (remain <= 0) {
+            getString(R.string.scan_done_all)
+        } else {
+            "剩余 $remain / $total · 已找到 $done"
+        }
     }
 
     private fun startCamera() {
@@ -112,9 +101,6 @@ class CameraActivity : AppCompatActivity() {
         val preview = Preview.Builder().build().also {
             it.setSurfaceProvider(binding.preview.surfaceProvider)
         }
-        imageCapture = ImageCapture.Builder()
-            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-            .build()
         imageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
@@ -122,8 +108,7 @@ class CameraActivity : AppCompatActivity() {
 
         try {
             provider.bindToLifecycle(
-                this, CameraSelector.DEFAULT_BACK_CAMERA,
-                preview, imageCapture, imageAnalysis
+                this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis
             )
         } catch (e: Exception) {
             Toast.makeText(this, "摄像头启动失败: ${e.message}", Toast.LENGTH_LONG).show()
@@ -138,133 +123,69 @@ class CameraActivity : AppCompatActivity() {
             proxy.close()
             return
         }
-        val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
+        val rotation = proxy.imageInfo.rotationDegrees
+        val image = InputImage.fromMediaImage(mediaImage, rotation)
         scanner.process(image)
-            .addOnSuccessListener { barcodes ->
-                if (barcodes.isNotEmpty() && !locked) {
-                    val raw = barcodes.firstNotNullOfOrNull { it.rawValue }
-                    raw?.let { onBarcodeScanned(it) }
-                }
-            }
-            .addOnCompleteListener { proxy.close() }
+            .addOnSuccessListener { barcodes -> renderTargets(barcodes, proxy, rotation) }
+            .addOnFailureListener { proxy.close() }
     }
 
-    /** 处理一次条码识别结果 */
-    private fun onBarcodeScanned(raw: String) {
-        val now = System.currentTimeMillis()
-        // 1.5s 内同一内容不重复处理
-        if (raw == lastProcessed && now - lastProcessedAt < 1500) return
-        lastProcessed = raw
-        lastProcessedAt = now
+    /**
+     * 把识别到的条码转换成 OverlayView 的 Target 并刷新。
+     * 计算旋转后图像尺寸（与 PreviewView 的 FIT_CENTER 坐标映射对应）。
+     */
+    private fun renderTargets(barcodes: List<Barcode>, proxy: ImageProxy, rotation: Int) {
+        // 旋转后图像宽高（90/270 时宽高互换）
+        val swap = rotation == 90 || rotation == 270
+        val imgW = if (swap) proxy.height else proxy.width
+        val imgH = if (swap) proxy.width else proxy.height
 
-        val match = WaybillStore.findMatch(raw)
-        if (match == null) {
-            runOnUiThread {
-                Toast.makeText(this, R.string.scan_not_found, Toast.LENGTH_SHORT).show()
-            }
-            return
+        val targets = barcodes.mapNotNull { b ->
+            val raw = b.rawValue ?: return@mapNotNull null
+            val box = b.boundingBox ?: return@mapNotNull null
+            val waybill = WaybillStore.findByRaw(raw)
+            OverlayView.Target(box, raw, waybill)
         }
-        if (match.scanned) {
-            runOnUiThread {
-                Toast.makeText(this, R.string.scan_duplicated, Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-        // 命中：截图
-        locked = true
-        runOnUiThread { captureAndShow(match, raw) }
-    }
 
-    /** 通过 ImageCapture 拍下当前画面作为截图 */
-    private fun captureAndShow(match: Waybill, raw: String) {
-        val capture = imageCapture
-        if (capture == null) {
-            showResult(match, raw, null)
-            return
-        }
-        val name = "WAYBILL_${timeFmt.format(Date())}.jpg"
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/ExpressScanner")
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
+        // 命中且尚未标记的运单 → 标记已扫描 + 震动提示
+        var needUpdateProgress = false
+        val newlyFound = mutableSetOf<String>()
+        for (t in targets) {
+            val w = t.waybill ?: continue
+            if (!w.scanned) {
+                WaybillStore.markScanned(w.number, screenshotPath = null)
+                needUpdateProgress = true
+            }
+            if (vibrated.add(w.number)) {
+                newlyFound += w.number
             }
         }
-        val resolver = contentResolver
-        val uri = resolver.insert(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
-        )
-        if (uri == null) {
-            showResult(match, raw, null)
-            return
-        }
-        val output = ImageCapture.OutputFileOptions.Builder(resolver, uri, contentValues).build()
-        capture.takePicture(
-            output,
-            ContextCompat.getMainExecutor(this),
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                    val path = uri.toString()
-                    WaybillStore.markScanned(match.number, path)
-                    showResult(match, raw, uri.toString())
-                }
 
-                override fun onError(exc: ImageCaptureException) {
-                    WaybillStore.markScanned(match.number, null)
-                    showResult(match, raw, null)
-                    Toast.makeText(
-                        this@CameraActivity,
-                        "截图保存失败: ${exc.message}",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            })
-    }
-
-    private fun showResult(match: Waybill, raw: String, screenshotUri: String?) {
-        vibrate()
-        binding.tvResultNumber.text = match.number
-        binding.tvResultCarrier.text = match.carrier ?: "未知快递"
-        binding.tvResultCarrier.visibility =
-            if (match.carrier.isNullOrEmpty()) View.GONE else View.VISIBLE
-        binding.resultCard.visibility = View.VISIBLE
-        binding.resultCard.alpha = 0f
-        binding.resultCard.animate().alpha(1f).setDuration(250).start()
-
-        if (screenshotUri != null) {
-            val resolver = contentResolver
-            try {
-                resolver.openInputStream(android.net.Uri.parse(screenshotUri))?.use { input ->
-                    val bmp = BitmapFactory.decodeStream(input)
-                    binding.ivScreenshot.setImageBitmap(bmp)
-                }
-                Toast.makeText(this, R.string.toast_saved, Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                binding.ivScreenshot.setImageDrawable(null)
+        runOnUiThread {
+            binding.overlay.setImageSize(imgW, imgH)
+            binding.overlay.setTargets(targets)
+            if (needUpdateProgress) updateProgress()
+            if (newlyFound.isNotEmpty()) {
+                vibrate()
+                val first = newlyFound.first()
+                Toast.makeText(
+                    this,
+                    getString(R.string.scan_found) + "：" + first,
+                    Toast.LENGTH_SHORT
+                ).show()
             }
-        } else {
-            binding.ivScreenshot.setImageDrawable(null)
         }
-        showProgress()
-    }
-
-    private fun resetForRescan() {
-        locked = false
-        lastProcessed = null
-        binding.resultCard.visibility = View.GONE
-        binding.ivScreenshot.setImageDrawable(null)
     }
 
     private fun vibrate() {
         val vibrator = getSystemService(Vibrator::class.java) ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator.vibrate(
-                VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE)
+                VibrationEffect.createOneShot(150, VibrationEffect.DEFAULT_AMPLITUDE)
             )
         } else {
             @Suppress("DEPRECATION")
-            vibrator.vibrate(120)
+            vibrator.vibrate(150)
         }
     }
 
@@ -272,5 +193,6 @@ class CameraActivity : AppCompatActivity() {
         super.onDestroy()
         scanner.close()
         analysisExecutor.shutdown()
+        runOnUiThread { binding.overlay.clearTargets() }
     }
 }

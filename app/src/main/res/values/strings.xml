@@ -14,7 +14,7 @@
     <string name="permission_camera_rationale">扫描条形码需要摄像头权限，请允许</string>
     <string name="permission_camera_denied">未获得摄像头权限，无法启动扫描</string>
     <string name="scan_title">对准快递面单条形码</string>
-    <string name="scan_hint">将条形码对准框内，自动识别</string>
+    <string name="scan_hint">移动摄像头扫视货架，匹配的运单会高亮标注</string>
     <string name="scan_found">已找到匹配运单</string>
     <string name="scan_not_found">未在列表中找到该运单</string>
     <string name="scan_duplicated">该运单已扫描过</string>
@@ -23,4 +23,5 @@
     <string name="back">返回</string>
     <string name="retry">重新扫描</string>
     <string name="found_label">扫描结果</string>
+    <string name="scan_done_all">全部运单已找到</string>
 </resources>
