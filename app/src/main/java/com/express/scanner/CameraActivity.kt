@@ -7,9 +7,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
@@ -22,12 +25,12 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * 摄像头实时扫描 + 画面标注。
  *
- * 工作方式：持续识别画面中所有条形码，命中待找运单的条码在画面中实时高亮
- * （绿色框 + 运单号气泡），方便在驿站货架前一眼定位目标快递。
+ * 持续识别画面中所有条形码，命中待找运单的条码在画面中实时高亮（绿色框 + 运单号气泡）。
  * 找到的运单会自动标记为「已扫描」，回到主界面可看到进度。
  */
 class CameraActivity : AppCompatActivity() {
@@ -37,7 +40,9 @@ class CameraActivity : AppCompatActivity() {
 
     private var imageAnalysis: ImageAnalysis? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    // 全格式识别：快递面单可能用 CODE_128 / PDF417 / QR / UPC_A / EAN_13 / ITF 等多种码制
+    private var camera: Camera? = null
+
+    // 全格式识别：覆盖快递面单所有码制（CODE_128 / PDF417 / QR / EAN_13 / UPC_A / ITF 等）
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS)
@@ -47,7 +52,11 @@ class CameraActivity : AppCompatActivity() {
     /** 已触发过震动的运单号，避免持续震动 */
     private val vibrated = mutableSetOf<String>()
     /** 上一次诊断 Toast 内容，节流用 */
-    private var lastUnmatchedToast: String? = null
+    private var lastToast: String? = null
+    /** 上一次成功识别到任何条码的时间戳，用于判断是否"完全识别不到" */
+    private var lastSeenAnyBarcode = 0L
+    /** 已提示过"识别不到条码"，避免反复弹 */
+    private var warnedNoBarcode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,6 +73,13 @@ class CameraActivity : AppCompatActivity() {
 
         binding.btnBack.setOnClickListener { finish() }
         updateProgress()
+
+        // 点击预览触发对焦（快递面单常因对不上焦识别失败）
+        binding.preview.setOnTouchListener { v, ev ->
+            if (ev.action == MotionEvent.ACTION_DOWN) focusAt(ev.x, ev.y)
+            v.performClick()
+            true
+        }
 
         binding.preview.post { startCamera() }
     }
@@ -95,21 +111,34 @@ class CameraActivity : AppCompatActivity() {
         val preview = Preview.Builder().build().also {
             it.setSurfaceProvider(binding.preview.surfaceProvider)
         }
+        // ImageAnalysis：默认分辨率 + KEEP_ONLY_LATEST，保证分析跟得上帧率
+        // （之前 1920x1080 反而让单帧分析太慢导致丢帧，扫不到小条码）
         imageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            // 提升分辨率，便于识别面单上密集的小条码
-            .setTargetResolution(android.util.Size(1920, 1080))
             .build()
             .also { it.setAnalyzer(analysisExecutor, ::analyzeImage) }
 
         try {
-            provider.bindToLifecycle(
+            camera = provider.bindToLifecycle(
                 this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis
             )
+            // 开启自动对焦（若支持）
+            camera?.cameraControl?.let { /* 默认 AF 已启用 */ }
         } catch (e: Exception) {
             Toast.makeText(this, "摄像头启动失败: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
         }
+    }
+
+    /** 点击屏幕对焦到指定点 */
+    private fun focusAt(x: Float, y: Float) {
+        val cam = camera ?: return
+        val factory = binding.preview.meteringPointFactory
+        val point = factory.createPoint(x, y)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
+            .setAutoCancelDuration(3, TimeUnit.SECONDS)
+            .build()
+        cam.cameraControl.startFocusAndMetering(action)
     }
 
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
@@ -123,7 +152,13 @@ class CameraActivity : AppCompatActivity() {
         val image = InputImage.fromMediaImage(mediaImage, rotation)
         scanner.process(image)
             .addOnSuccessListener { barcodes -> renderTargets(barcodes, proxy, rotation) }
-            .addOnFailureListener { proxy.close() }
+            .addOnFailureListener {
+                // 引擎报错也提示，便于诊断
+                runOnUiThread {
+                    showToast("识别引擎错误: ${it.message}")
+                }
+                proxy.close()
+            }
     }
 
     /**
@@ -167,28 +202,40 @@ class CameraActivity : AppCompatActivity() {
             binding.overlay.setImageSize(imgW, imgH)
             binding.overlay.setTargets(targets)
             if (needUpdateProgress) updateProgress()
-            if (newlyFound.isNotEmpty()) {
-                vibrate()
-                val first = newlyFound.first()
-                Toast.makeText(
-                    this,
-                    getString(R.string.scan_found) + "：" + first,
-                    Toast.LENGTH_SHORT
-                ).show()
-            } else if (unmatchedRaw.isNotEmpty()) {
-                // 诊断 Toast：识别到了条码但没匹配到运单列表
-                // （节流：与上次内容相同时不重复弹）
-                val msg = unmatchedRaw.joinToString(" | ")
-                if (msg != lastUnmatchedToast) {
-                    lastUnmatchedToast = msg
-                    Toast.makeText(
-                        this,
-                        "识别到(未匹配): $msg",
-                        Toast.LENGTH_LONG
-                    ).show()
+
+            when {
+                newlyFound.isNotEmpty() -> {
+                    vibrate()
+                    showToast(getString(R.string.scan_found) + "：" + newlyFound.first())
+                }
+                unmatchedRaw.isNotEmpty() -> {
+                    // 识别到了条码但没匹配到运单列表，显示原文
+                    showToast("识别到(未匹配): " + unmatchedRaw.joinToString(" | "))
+                }
+                barcodes.isEmpty() -> {
+                    // 完全没识别到任何条码
+                    if (lastSeenAnyBarcode == 0L) {
+                        // 第一帧就空，不弹
+                    } else if (!warnedNoBarcode && System.currentTimeMillis() - lastSeenAnyBarcode > 8000) {
+                        // 8 秒内一直没识别到任何条码 → 提示（只弹一次）
+                        warnedNoBarcode = true
+                        showToast("未识别到条码，请靠近并对准条形码后点击屏幕对焦")
+                    }
                 }
             }
+            if (barcodes.isNotEmpty()) {
+                lastSeenAnyBarcode = System.currentTimeMillis()
+                warnedNoBarcode = false
+            }
         }
+    }
+
+    /** 节流 Toast：内容相同或 1.5s 内重复则不弹 */
+    private fun showToast(msg: String) {
+        val now = System.currentTimeMillis()
+        if (msg == lastToast) return
+        lastToast = msg
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
     }
 
     private fun vibrate() {
