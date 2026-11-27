@@ -86,10 +86,10 @@ gradle assembleDebug
 
 仓库已配置 GitHub Actions：[.github/workflows/android.yml](.github/workflows/android.yml)
 
-- **触发方式**：推送到 `main` 分支，或手动 `workflow_dispatch`
+- **触发方式**：推送到 `main` 且改动了源码或构建配置（`app/**`、`build.gradle`、`settings.gradle`、`gradle.properties`、workflow 自身），也可手动 `workflow_dispatch`
 - **流程**：JDK 17 → Gradle 8.5 → `assembleDebug` → 自动创建 Release（tag 为 `v1.0.<运行序号>`）→ 上传 APK
 
-也就是说，每次 push 到 `main` 都会自动产出一个新的 Release 版本。
+也就是说，源码变更会自动产出一个新的 Release 版本；仅改文档不会触发构建。
 
 ---
 

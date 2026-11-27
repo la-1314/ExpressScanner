@@ -3,6 +3,13 @@ name: Build & Release
 on:
   push:
     branches: [ main ]
+    # 仅在源码/构建配置变更时触发，避免只改文档也发一次版
+    paths:
+      - 'app/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
 
 permissions:

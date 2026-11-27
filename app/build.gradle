@@ -54,7 +54,4 @@ dependencies {
 
     // ML Kit 条码扫描
     implementation 'com.google.mlkit:barcode-scanning:17.2.0'
-
-    // Gson for 持久化已找到的运单
-    implementation 'com.google.code.gson:gson:2.10.1'
 }
