@@ -26,7 +26,6 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 摄像头实时扫描 + 画面标注。
@@ -62,8 +61,6 @@ class CameraActivity : AppCompatActivity() {
     private var startedAt = 0L
     private var lastSeenAnyBarcode = 0L
     private var warnedNoBarcode = false
-    private val analyzedFrames = AtomicLong(0)
-    private var lastDiagAt = 0L
 
     @Volatile
     private var destroyed = false
@@ -160,8 +157,6 @@ class CameraActivity : AppCompatActivity() {
             proxy.close()
             return
         }
-        analyzedFrames.incrementAndGet()
-
         val rotation = proxy.imageInfo.rotationDegrees
         // 尺寸必须在 close 之前取出：90/270 时宽高互换
         val swap = rotation == 90 || rotation == 270
@@ -252,34 +247,18 @@ class CameraActivity : AppCompatActivity() {
     private fun looksLikeWaybill(raw: String): Boolean =
         waybillShape.matches(raw.trim().uppercase())
 
-    /**
-     * 底部常驻诊断信息：让「识别不到 / 列表为空 / 未匹配」一眼可辨，
-     * 不依赖 Toast（部分 ROM 对 Toast 有拦截）。
-     */
+    /** 底部提示：只在列表为空时显示引导，其余时间保持简洁 */
     private fun showDiag(targets: List<OverlayView.Target>) {
-        val now = System.currentTimeMillis()
-        if (now - lastDiagAt < 400) return // 节流，避免每帧重排文本
-        lastDiagAt = now
-
         val total = WaybillStore.totalCount()
-        val frames = analyzedFrames.get()
-
         if (total == 0) {
-            binding.tvHint.text = "运单列表为空：请先回到主界面粘贴文字并点「提取运单号」\n" +
-                "已分析 $frames 帧 · 识别到 ${targets.size} 个条码"
+            binding.tvHint.text = "运单列表为空：请先回到主界面粘贴文字并点「提取运单号」"
             return
         }
-
-        val sample = targets.take(2).joinToString("  ") { t ->
-            val r = t.rawValue.replace("\n", " ")
-            if (r.length > 22) r.take(22) + "…" else r
-        }
         val done = WaybillStore.list.count { it.scanned }
-        binding.tvHint.text = buildString {
-            append("已分析 $frames 帧 · 识别到 ${targets.size} 个条码")
-            if (targets.isNotEmpty()) append("：").append(sample)
-            append(" · 命中 $done/$total")
-            if (targets.isEmpty()) append("\n读不到条码时请靠近一些，并点击屏幕对焦")
+        if (done >= total) {
+            binding.tvHint.text = getString(R.string.scan_done_all)
+        } else {
+            binding.tvHint.text = "移动摄像头扫视货架，匹配的运单会高亮标注"
         }
     }
 
