@@ -16,34 +16,19 @@ object WaybillStore {
         _list.addAll(items)
     }
 
-    fun clear() {
-        _list.clear()
-    }
-
-    /** 根据扫码结果查找匹配的运单；返回匹配项（不区分大小写，兼容数字片段）。 */
-    fun findMatch(scanned: String): Waybill? {
-        return _list.firstOrNull { w ->
-            !w.scanned && WaybillExtractor.matches(scanned, w.number)
-        } ?: _list.firstOrNull { w ->
-            w.scanned && WaybillExtractor.matches(scanned, w.number)
-        }
-    }
-
     /** 实时标注用：根据条码原文查找匹配运单（不论是否已扫描，命中即高亮）。 */
     fun findByRaw(raw: String): Waybill? =
         _list.firstOrNull { WaybillExtractor.matches(raw, it.number) }
 
-    /** 标记某个运单为已扫描并记录截图路径 */
-    fun markScanned(number: String, screenshotPath: String?): Waybill? {
+    /** 标记某个运单为已扫描 */
+    fun markScanned(number: String): Waybill? {
         val target = _list.firstOrNull { WaybillExtractor.matches(number, it.number) }
         target?.let {
             it.scanned = true
             it.scanTime = System.currentTimeMillis()
-            it.screenshotPath = screenshotPath
         }
         return target
     }
 
-    fun remainingCount(): Int = _list.count { !it.scanned }
     fun totalCount(): Int = _list.size
 }

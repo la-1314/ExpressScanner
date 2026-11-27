@@ -26,12 +26,15 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 摄像头实时扫描 + 画面标注。
  *
  * 持续识别画面中所有条形码，命中待找运单的条码在画面中实时高亮（绿色框 + 运单号气泡）。
- * 找到的运单会自动标记为「已扫描」，回到主界面可看到进度。
+ * 找到的运单自动标记为「已扫描」，回到主界面可看到进度。
+ *
+ * 关键约束：每帧分析完成后必须 close(ImageProxy)，否则 CameraX 不再送新帧。
  */
 class CameraActivity : AppCompatActivity() {
 
@@ -49,15 +52,23 @@ class CameraActivity : AppCompatActivity() {
             .build()
     )
 
-    /** 已触发过震动的运单号，避免持续震动 */
-    private val vibrated = mutableSetOf<String>()
-    /** 上一次诊断 Toast 内容，节流用 */
-    private var lastToast: String? = null
-    /** 上一次成功识别到任何条码的时间戳，用于判断是否"完全识别不到" */
-    private var lastSeenAnyBarcode = 0L
-    /** 已提示过"识别不到条码"，避免反复弹 */
-    private var warnedNoBarcode = false
+    /** 形似运单号的条码：2~4 字母 + 8~15 数字，或纯数字 10~15 位 */
+    private val waybillShape = Regex("^[A-Z]{2,4}\\d{8,15}$|^\\d{10,15}$")
 
+    /** 已触发过震动的运单号，避免同一运单反复震动 */
+    private val vibrated = mutableSetOf<String>()
+    private var lastToast: String? = null
+    private var lastUnmatchedToastAt = 0L
+    private var startedAt = 0L
+    private var lastSeenAnyBarcode = 0L
+    private var warnedNoBarcode = false
+    private val analyzedFrames = AtomicLong(0)
+    private var lastDiagAt = 0L
+
+    @Volatile
+    private var destroyed = false
+
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityCameraBinding.inflate(layoutInflater)
@@ -72,14 +83,17 @@ class CameraActivity : AppCompatActivity() {
         }
 
         binding.btnBack.setOnClickListener { finish() }
-        updateProgress()
 
-        // 点击预览触发对焦（快递面单常因对不上焦识别失败）
+        // 点击预览触发对焦（面单条码小、距离近，自动对焦常对到背景上）
         binding.preview.setOnTouchListener { v, ev ->
             if (ev.action == MotionEvent.ACTION_DOWN) focusAt(ev.x, ev.y)
             v.performClick()
             true
         }
+
+        startedAt = System.currentTimeMillis()
+        updateProgress()
+        showDiag(emptyList())
 
         binding.preview.post { startCamera() }
     }
@@ -87,11 +101,10 @@ class CameraActivity : AppCompatActivity() {
     private fun updateProgress() {
         val total = WaybillStore.totalCount()
         val done = WaybillStore.list.count { it.scanned }
-        val remain = total - done
-        binding.tvProgress.text = if (remain <= 0) {
+        binding.tvProgress.text = if (total - done <= 0) {
             getString(R.string.scan_done_all)
         } else {
-            "剩余 $remain / $total · 已找到 $done"
+            "剩余 ${total - done} / $total · 已找到 $done"
         }
     }
 
@@ -103,7 +116,6 @@ class CameraActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    @SuppressLint("ClickableViewAccessibility")
     private fun bindUseCases() {
         val provider = cameraProvider ?: return
         provider.unbindAll()
@@ -111,8 +123,7 @@ class CameraActivity : AppCompatActivity() {
         val preview = Preview.Builder().build().also {
             it.setSurfaceProvider(binding.preview.surfaceProvider)
         }
-        // ImageAnalysis：默认分辨率 + KEEP_ONLY_LATEST，保证分析跟得上帧率
-        // （之前 1920x1080 反而让单帧分析太慢导致丢帧，扫不到小条码）
+        // 默认分辨率 + KEEP_ONLY_LATEST，保证分析跟得上帧率
         imageAnalysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
@@ -122,8 +133,6 @@ class CameraActivity : AppCompatActivity() {
             camera = provider.bindToLifecycle(
                 this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis
             )
-            // 开启自动对焦（若支持）
-            camera?.cameraControl?.let { /* 默认 AF 已启用 */ }
         } catch (e: Exception) {
             Toast.makeText(this, "摄像头启动失败: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
@@ -133,8 +142,7 @@ class CameraActivity : AppCompatActivity() {
     /** 点击屏幕对焦到指定点 */
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
-        val factory = binding.preview.meteringPointFactory
-        val point = factory.createPoint(x, y)
+        val point = binding.preview.meteringPointFactory.createPoint(x, y)
         val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF)
             .setAutoCancelDuration(3, TimeUnit.SECONDS)
             .build()
@@ -143,96 +151,140 @@ class CameraActivity : AppCompatActivity() {
 
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun analyzeImage(proxy: ImageProxy) {
+        if (destroyed) {
+            proxy.close()
+            return
+        }
         val mediaImage = proxy.image
         if (mediaImage == null) {
             proxy.close()
             return
         }
-        val rotation = proxy.imageInfo.rotationDegrees
-        val image = InputImage.fromMediaImage(mediaImage, rotation)
-        scanner.process(image)
-            .addOnSuccessListener { barcodes -> renderTargets(barcodes, proxy, rotation) }
-            .addOnFailureListener {
-                // 引擎报错也提示，便于诊断
-                runOnUiThread {
-                    showToast("识别引擎错误: ${it.message}")
-                }
-                proxy.close()
-            }
-    }
+        analyzedFrames.incrementAndGet()
 
-    /**
-     * 把识别到的条码转换成 OverlayView 的 Target 并刷新。
-     * 计算旋转后图像尺寸（与 PreviewView 的 FIT_CENTER 坐标映射对应）。
-     */
-    private fun renderTargets(barcodes: List<Barcode>, proxy: ImageProxy, rotation: Int) {
-        // 旋转后图像宽高（90/270 时宽高互换）
+        val rotation = proxy.imageInfo.rotationDegrees
+        // 尺寸必须在 close 之前取出：90/270 时宽高互换
         val swap = rotation == 90 || rotation == 270
         val imgW = if (swap) proxy.height else proxy.width
         val imgH = if (swap) proxy.width else proxy.height
 
+        val image = InputImage.fromMediaImage(mediaImage, rotation)
+        try {
+            scanner.process(image)
+                .addOnSuccessListener { barcodes -> renderTargets(barcodes, imgW, imgH) }
+                .addOnFailureListener { e ->
+                    runOnUiThread {
+                        if (!destroyed) showToast("识别引擎错误: ${e.message}")
+                    }
+                }
+                .addOnCompleteListener {
+                    // 关键：帧处理完必须归还 ImageProxy，否则 CameraX 停止送新帧
+                    proxy.close()
+                }
+        } catch (t: Throwable) {
+            // Activity 销毁后 scanner 可能已 close，避免分析线程抛异常崩溃
+            proxy.close()
+        }
+    }
+
+    /** 把识别到的条码转换成 OverlayView 的 Target 并刷新（图像尺寸已按旋转处理） */
+    private fun renderTargets(barcodes: List<Barcode>, imgW: Int, imgH: Int) {
         val targets = barcodes.mapNotNull { b ->
             val raw = b.rawValue ?: return@mapNotNull null
             val box = b.boundingBox ?: return@mapNotNull null
-            val waybill = WaybillStore.findByRaw(raw)
-            OverlayView.Target(box, raw, waybill)
+            OverlayView.Target(box, raw, WaybillStore.findByRaw(raw))
         }
 
-        // 命中且尚未标记的运单 → 标记已扫描 + 震动提示
         var needUpdateProgress = false
         val newlyFound = mutableSetOf<String>()
-        // 诊断：识别到但未命中的条码原文（去重），便于排查是"识别不到"还是"匹配不到"
-        val unmatchedRaw = linkedSetOf<String>()
+        // 识别到但不在列表里的运单号（仅形似运单号的才提示，忽略货架上其他包裹的随机码）
+        val unmatched = linkedSetOf<String>()
+
         for (t in targets) {
             val w = t.waybill
             if (w == null) {
-                unmatchedRaw.add(t.rawValue)
+                if (looksLikeWaybill(t.rawValue)) unmatched.add(t.rawValue)
                 continue
             }
             if (!w.scanned) {
-                WaybillStore.markScanned(w.number, screenshotPath = null)
+                WaybillStore.markScanned(w.number)
                 needUpdateProgress = true
-            }
-            if (vibrated.add(w.number)) {
-                newlyFound += w.number
+                if (vibrated.add(w.number)) newlyFound.add(w.number)
             }
         }
 
         runOnUiThread {
+            if (destroyed) return@runOnUiThread
             binding.overlay.setImageSize(imgW, imgH)
             binding.overlay.setTargets(targets)
             if (needUpdateProgress) updateProgress()
+            showDiag(targets)
 
+            val now = System.currentTimeMillis()
             when {
                 newlyFound.isNotEmpty() -> {
                     vibrate()
                     showToast(getString(R.string.scan_found) + "：" + newlyFound.first())
                 }
-                unmatchedRaw.isNotEmpty() -> {
-                    // 识别到了条码但没匹配到运单列表，显示原文
-                    showToast("识别到(未匹配): " + unmatchedRaw.joinToString(" | "))
+                unmatched.isNotEmpty() -> {
+                    val msg = "识别到疑似运单号但不在列表: " + unmatched.joinToString(" | ")
+                    if (now - lastUnmatchedToastAt > 3000 && msg != lastToast) {
+                        lastUnmatchedToastAt = now
+                        showToast(msg)
+                    }
                 }
-                barcodes.isEmpty() -> {
-                    // 完全没识别到任何条码
-                    if (lastSeenAnyBarcode == 0L) {
-                        // 第一帧就空，不弹
-                    } else if (!warnedNoBarcode && System.currentTimeMillis() - lastSeenAnyBarcode > 8000) {
-                        // 8 秒内一直没识别到任何条码 → 提示（只弹一次）
+                else -> {
+                    // 连续 8 秒读不到任何条码 → 提示一次
+                    val gap = now - maxOf(startedAt, lastSeenAnyBarcode)
+                    if (!warnedNoBarcode && gap > 8000) {
                         warnedNoBarcode = true
-                        showToast("未识别到条码，请靠近并对准条形码后点击屏幕对焦")
+                        showToast("未识别到条码：请靠近并对准条形码后点击屏幕对焦")
                     }
                 }
             }
             if (barcodes.isNotEmpty()) {
-                lastSeenAnyBarcode = System.currentTimeMillis()
+                lastSeenAnyBarcode = now
                 warnedNoBarcode = false
             }
         }
     }
 
-    /** 节流 Toast：内容相同或 1.5s 内重复则不弹 */
-    private fun showToast(msg: String) {
+    private fun looksLikeWaybill(raw: String): Boolean =
+        waybillShape.matches(raw.trim().uppercase())
+
+    /**
+     * 底部常驻诊断信息：让「识别不到 / 列表为空 / 未匹配」一眼可辨，
+     * 不依赖 Toast（部分 ROM 对 Toast 有拦截）。
+     */
+    private fun showDiag(targets: List<OverlayView.Target>) {
         val now = System.currentTimeMillis()
+        if (now - lastDiagAt < 400) return // 节流，避免每帧重排文本
+        lastDiagAt = now
+
+        val total = WaybillStore.totalCount()
+        val frames = analyzedFrames.get()
+
+        if (total == 0) {
+            binding.tvHint.text = "运单列表为空：请先回到主界面粘贴文字并点「提取运单号」\n" +
+                "已分析 $frames 帧 · 识别到 ${targets.size} 个条码"
+            return
+        }
+
+        val sample = targets.take(2).joinToString("  ") { t ->
+            val r = t.rawValue.replace("\n", " ")
+            if (r.length > 22) r.take(22) + "…" else r
+        }
+        val done = WaybillStore.list.count { it.scanned }
+        binding.tvHint.text = buildString {
+            append("已分析 $frames 帧 · 识别到 ${targets.size} 个条码")
+            if (targets.isNotEmpty()) append("：").append(sample)
+            append(" · 命中 $done/$total")
+            if (targets.isEmpty()) append("\n读不到条码时请靠近一些，并点击屏幕对焦")
+        }
+    }
+
+    /** 节流 Toast：内容相同则不再弹出 */
+    private fun showToast(msg: String) {
         if (msg == lastToast) return
         lastToast = msg
         Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
@@ -251,9 +303,10 @@ class CameraActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         super.onDestroy()
+        binding.overlay.clearTargets()
         scanner.close()
         analysisExecutor.shutdown()
-        runOnUiThread { binding.overlay.clearTargets() }
     }
 }

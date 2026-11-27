@@ -62,7 +62,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshList() {
         val list = WaybillStore.list
-        adapter.submitList(list.toList())
+        // 必须提交副本：DiffUtil 对同一个对象引用判定「内容未变」，不会重新绑定
+        adapter.submitList(list.map { it.copy() })
         binding.tvCount.text = getString(R.string.result_count, list.size)
         binding.tvScannedCount.text = "已扫描 ${list.count { it.scanned }}/${list.size}"
         binding.tvEmpty.visibility =
